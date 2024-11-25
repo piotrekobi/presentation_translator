@@ -1,7 +1,5 @@
-import os
-
-CREDENTIALS_PATH = os.path.join("credentials.json")
-LOGS_DIR = os.path.join("..", "logs")
+CREDENTIALS_PATH = "credentials.json"
+LOGS_DIR = "logs"
 
 SAMPLE_RATE = 16000
 CHUNK_MS = 30
