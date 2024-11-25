@@ -1,0 +1,6 @@
+google-cloud-speech
+google-cloud-translate
+pyaudio
+webrtcvad
+python-dotenv
+setuptools
