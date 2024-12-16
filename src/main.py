@@ -1,139 +1,58 @@
 import os
-import pyaudio
-import queue
+from audio_handler import AudioHandler
+from speech_recognizer import SpeechRecognizer
+from subtitle_display import SubtitleDisplay
 import threading
-from datetime import datetime
-from google.cloud import speech
-
-from constants import CREDENTIALS_PATH, SAMPLE_RATE, CHUNK_SIZE, CHANNELS
-from logger import Logger
-from voice_detector import VoiceDetector
-from speech_to_text import GoogleCloudSpeechToText
-from translator import GoogleTranslate
-from gui import TranslatorGUI
+import time
 
 
-class SpeechTranslator:
+class SubtitleApp:
     def __init__(self):
-        self.logger = Logger()
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_PATH
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        credentials_path = os.path.join(project_root, "credentials.json")
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+
+        self.audio_handler = AudioHandler()
+        self.speech_recognizer = SpeechRecognizer()
+        self.subtitle_display = SubtitleDisplay()
+        self.is_running = False
+        self.last_audio_time = time.time()
+        self.silence_threshold = 2  # seconds
+
+    def start(self):
+        self.is_running = True
+        self.audio_handler.start_recording()
+        self.speech_recognizer.start_recognition()
+
+        processing_thread = threading.Thread(target=self._process_audio)
+        transcription_thread = threading.Thread(target=self._process_transcription)
+
+        processing_thread.start()
+        transcription_thread.start()
+
+        self.subtitle_display.start()
 
         self.is_running = False
-        self.audio_thread = None
-        self.audio_buffer = queue.Queue()
+        self.audio_handler.stop_recording()
+        self.speech_recognizer.stop_recognition()
 
-        self.voice_detector = VoiceDetector()
-        self.speech_to_text = GoogleCloudSpeechToText()
-        self.translator = GoogleTranslate()
-        self.audio = pyaudio.PyAudio()
+    def _process_audio(self):
+        while self.is_running:
+            audio_data = self.audio_handler.get_audio_data()
+            if audio_data:
+                self.last_audio_time = time.time()
+                self.speech_recognizer.process_audio(audio_data)
+            time.sleep(0.001)
 
-        self.gui = TranslatorGUI()
-        self.gui.set_callbacks(
-            self.start_translation, self.stop_translation, self.gui.clear_text
-        )
-
-    def start_translation(self):
-        try:
-            self.is_running = True
-            self.gui.update_status("Running", "green")
-            self.voice_detector.reset()
-            self.audio_thread = threading.Thread(
-                target=self.process_audio_stream, daemon=True
-            )
-            self.audio_thread.start()
-            self.logger.info("Translation started")
-        except Exception as e:
-            self.logger.error(f"Error starting translation: {e}")
-            self.gui.update_status(f"Error: {str(e)}", "red")
-
-    def stop_translation(self):
-        self.is_running = False
-        self.gui.update_status("Stopped", "red")
-        if self.audio_thread:
-            self.audio_thread.join(timeout=1)
-        self.logger.info("Translation stopped")
-
-    def process_audio_stream(self):
-        try:
-            stream = self.audio.open(
-                format=pyaudio.paInt16,
-                channels=CHANNELS,
-                rate=SAMPLE_RATE,
-                input=True,
-                frames_per_buffer=CHUNK_SIZE,
-                stream_callback=self.audio_callback,
-            )
-
-            stream.start_stream()
-
-            def audio_generator():
-                speech_count = 0
-                while self.is_running:
-                    if not self.audio_buffer.empty():
-                        chunk = self.audio_buffer.get()
-                        if self.voice_detector.process_audio(chunk, datetime.now()):
-                            speech_count += 1
-                            if speech_count > 3:
-                                yield speech.StreamingRecognizeRequest(
-                                    audio_content=chunk
-                                )
-                        else:
-                            speech_count = 0
-
-            responses = self.speech_to_text.client.streaming_recognize(
-                self.speech_to_text.streaming_config, audio_generator()
-            )
-
-            for response in responses:
-                if not self.is_running:
-                    break
-                if not response.results:
-                    continue
-
-                result = response.results[0]
-                if not result.alternatives:
-                    continue
-
-                transcript = result.alternatives[0].transcript
-
-                if result.is_final:
-                    translation = self.translator.translate(transcript)
-                    self.gui.update_final_text(transcript, translation)
-                    self.gui.update_interim_text("")
-                else:
-                    self.gui.update_interim_text(f"Listening: {transcript}")
-
-        except Exception as e:
-            self.logger.error(f"Error in process_audio_stream: {e}")
-            self.gui.update_status(f"Error: {str(e)}", "red")
-        finally:
-            stream.stop_stream()
-            stream.close()
-
-    def audio_callback(self, in_data, frame_count, time_info, status):
-        if self.is_running:
-            try:
-                self.audio_buffer.put(in_data)
-            except Exception as e:
-                self.logger.error(f"Error in audio callback: {e}")
-        return (None, pyaudio.paContinue)
-
-    def run(self):
-        self.gui.run()
-
-    def __del__(self):
-        self.audio.terminate()
-
-
-def main():
-    try:
-        app = SpeechTranslator()
-        app.run()
-    except Exception as e:
-        logger = Logger()
-        logger.error(f"Fatal error in main: {e}")
-        raise
+    def _process_transcription(self):
+        while self.is_running:
+            transcript, is_final = self.speech_recognizer.get_transcript()
+            if transcript:
+                self.subtitle_display.update_subtitle(transcript, is_final)
+            time.sleep(0.001)
 
 
 if __name__ == "__main__":
-    main()
+    app = SubtitleApp()
+    app.start()

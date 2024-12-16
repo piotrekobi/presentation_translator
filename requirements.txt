@@ -4,3 +4,4 @@ pyaudio
 webrtcvad
 python-dotenv
 setuptools
+PyQt6
